@@ -6,21 +6,18 @@ from pathlib import Path
 from tqdm import tqdm
 
 # --- Configuration & Path Handling ---
-try:
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
-except NameError:
-    PROJECT_ROOT = Path.cwd()
+# CORRECTED: The Project Root is the current working directory,
+# since the script is run from 'nhl_stats'.
+PROJECT_ROOT = Path.cwd()
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 import config
 
-# --- File Paths ---
-# Use the new, clean raw directory from our successful download
-RAW_SHIFTS_DIR = PROJECT_ROOT / "data" / "raw" / f"shift_charts_{config.SEASON_TO_PROCESS}_{config.SEASON_TO_PROCESS+1}"
-PROCESSED_SHIFTS_DIR = PROJECT_ROOT / "data" / "processed" / f"shift_charts_{config.SEASON_TO_PROCESS}_{config.SEASON_TO_PROCESS+1}_processed"
-
+# --- File Paths from Config ---
+RAW_SHIFTS_DIR = PROJECT_ROOT / config.RAW_SHIFTS_DATA_FOLDER
+PROCESSED_SHIFTS_DIR = PROJECT_ROOT / config.PROCESSED_SHIFTS_DIR
 
 # --- Helper Function ---
 def parse_time_to_seconds(time_str):
@@ -34,8 +31,7 @@ def parse_time_to_seconds(time_str):
 def main():
     """
     Reads all raw shift charts, filters for ONLY regular shifts (typeCode 517),
-    converts times to seconds, and saves them to a new processed directory.
-    This is the definitive foundation for the project.
+    converts times to seconds, and saves them to the new structured processed directory.
     """
     print("--- Starting Foundational Step: Processing All Raw Shift Charts ---")
     
@@ -46,45 +42,38 @@ def main():
 
     if not raw_files_to_process:
         print(f"FATAL ERROR: No raw shift files found in {RAW_SHIFTS_DIR}.")
-        print("Please ensure the 'fetch_season_data.py' script has been run successfully.")
         sys.exit(1)
 
     for raw_file_path in tqdm(raw_files_to_process, desc="Processing Raw Shift Files"):
         try:
+            game_id_str = raw_file_path.stem.split('_')[0]
             game_df = pd.read_csv(raw_file_path)
-
-            # --- THIS IS THE CRITICAL FIX BASED ON YOUR DIAGNOSTIC ---
-            # We only want regular on-ice shifts, which have the real duration.
+            
             regular_shifts_df = game_df[game_df['typeCode'] == 517].copy()
-            # --- END OF FIX ---
-
             if regular_shifts_df.empty:
                 continue
 
-            # Perform all time conversions on this clean data
-            regular_shifts_df['playerId'] = regular_shifts_df['playerId'].astype(int)
-            regular_shifts_df['period'] = regular_shifts_df['period'].astype(int)
-            
-            # Use the reliable 'duration' column from the 517 shifts
+            regular_shifts_df.rename(columns={
+                'gameId': 'game_id', 'playerId': 'player_id', 'teamAbbrev': 'team'
+            }, inplace=True)
+
             regular_shifts_df['duration_seconds'] = regular_shifts_df['duration'].apply(parse_time_to_seconds)
             regular_shifts_df['start_seconds_period'] = regular_shifts_df['startTime'].apply(parse_time_to_seconds)
-            regular_shifts_df['end_seconds_period'] = regular_shifts_df['endTime'].apply(parse_time_to_seconds)
             
-            regular_shifts_df.dropna(subset=['duration_seconds', 'start_seconds_period', 'end_seconds_period'], inplace=True)
+            regular_shifts_df.dropna(subset=['duration_seconds', 'start_seconds_period'], inplace=True)
+            
+            regular_shifts_df['end_seconds_period'] = regular_shifts_df['start_seconds_period'] + regular_shifts_df['duration_seconds']
 
             regular_shifts_df['absolute_start_seconds'] = (regular_shifts_df['period'] - 1) * 1200 + regular_shifts_df['start_seconds_period']
-            regular_shifts_df['absolute_end_seconds'] = (regular_shifts_df['period'] - 1) * 1200 + regular_shifts_df['end_seconds_period']
+            regular_shifts_df['absolute_end_seconds'] = regular_shifts_df['absolute_start_seconds'] + regular_shifts_df['duration_seconds']
             
-            # Define the columns for our new, clean files
             final_columns = [
-                'gameId', 'shiftNumber', 'period', 'playerId', 'teamAbbrev', 'firstName', 'lastName',
-                'startTime', 'endTime', 'duration', 'start_seconds_period', 'end_seconds_period',
+                'game_id', 'player_id', 'team', 'firstName', 'lastName', 'period',
                 'absolute_start_seconds', 'absolute_end_seconds', 'duration_seconds'
             ]
-            final_columns = [col for col in final_columns if col in regular_shifts_df.columns]
-            processed_df = regular_shifts_df[final_columns]
+            processed_df = regular_shifts_df[[col for col in final_columns if col in regular_shifts_df.columns]].copy()
             
-            output_path = PROCESSED_SHIFTS_DIR / raw_file_path.name
+            output_path = PROCESSED_SHIFTS_DIR / f"{game_id_str}.csv"
             processed_df.to_csv(output_path, index=False)
 
         except Exception as e:
@@ -92,8 +81,7 @@ def main():
             continue
 
     print("\n--- SUCCESS! ---")
-    print("All raw shift charts have been processed using the correct logic.")
-    print("The new processed files contain only valid shifts with reliable durations.")
+    print(f"All raw shift charts have been processed and saved to {PROCESSED_SHIFTS_DIR}")
 
 if __name__ == "__main__":
     main()
