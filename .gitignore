@@ -1,0 +1,8 @@
+# .gitignore
+
+# Ignore Python's auto-generated cache files
+__pycache__/
+
+# Ignore data folders
+data/
+archive/
